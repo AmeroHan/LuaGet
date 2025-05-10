@@ -13,27 +13,41 @@ local function gether(iter, ctx, st)
 	return list
 end
 
-local function flat_map(map, iter, ctx, init_st)
-	local function mapped_iter(ctx, st)
-		local p_iter, p_ctx = ctx.p_iter, ctx.p_ctx
-		local p_st = st.p_st
-		local next_p_st, p_value = p_iter(p_ctx, p_st)
-		if next_p_st == nil then return nil end
 
-		local c_iter, c_ctx, c_st = st.c_iter, st.c_ctx, st.c_st
-		if not c_iter then
-			c_iter, c_ctx, c_st = map(p_value)
-		end
-
-		local next_c_st, c_value = c_iter(c_ctx, c_st)
-		if next_c_st == nil then
-			return { p_st = next_p_st }, c_value
-		end
-
-		return { p_st = p_st, c_iter = c_iter, c_ctx = c_ctx, c_st = next_c_st }, c_value
+local function mapped_iter(ctx, st)
+	local p_iter, p_ctx = ctx.p_iter, ctx.p_ctx
+	local p_st, p_value = st.p_st, st.p_value
+	if p_st == nil then return nil end
+	if p_value == nil then
+		p_st, p_value = p_iter(p_ctx, p_st)
+		if p_st == nil then return nil end
 	end
 
-	return mapped_iter, { p_iter = iter, p_ctx = ctx }, { p_st = init_st }
+	local c_iter, c_ctx, c_st = st.c_iter, st.c_ctx, st.c_st
+	if not c_iter then
+		c_iter, c_ctx, c_st = ctx.map(p_value)
+	end
+
+	local next_c_st, c_value = c_iter(c_ctx, c_st)
+	if next_c_st == nil then
+		local next_p_st, new_p_value = p_iter(p_ctx, p_st)
+		return mapped_iter(ctx, { p_st = next_p_st, p_value = new_p_value })
+	end
+
+	return {
+		p_st = p_st,
+		p_value = p_value,
+		c_iter = c_iter,
+		c_ctx = c_ctx,
+		c_st = next_c_st,
+	}, c_value
+end
+
+local function flat_map(map, iter, ctx, init_st)
+	return
+		mapped_iter,
+		{ map = map, p_iter = iter, p_ctx = ctx },
+		{ p_st = init_st }
 end
 
 
@@ -131,13 +145,6 @@ local function method_items(self)
 end
 methods.items = method_items
 
-local function method_with(self, field_name)
-	local getter = method_filter(self, function (x) return x[field_name] ~= nil end)
-	getter[ENTRY] = method_with
-	return getter
-end
-methods.with = method_with
-
 ----
 
 methods.one = function (self)
@@ -156,7 +163,7 @@ Getter_mt = {
 	__index = function (self, key)
 		local key_type = type(key)
 		if key_type == 'function' then
-			return method_filter(self, key)
+			return method_filter(method_items(self), key)
 		end
 		return method_field(self, key)
 	end,
