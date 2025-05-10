@@ -138,10 +138,16 @@ local function method_with(self, field_name)
 end
 methods.with = method_with
 
+----
+
 methods.one = function (self)
 	local st, value = self[ITER](self[CTX], self[INIT_ST])
 	if st == nil then return nil end
 	return value
+end
+
+methods.iter = function (self)
+	return self[ITER], self[CTX], self[INIT_ST]
 end
 
 
