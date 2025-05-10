@@ -3,7 +3,6 @@ local setmt = setmetatable
 local unpack = unpack or table.unpack
 
 local iter_ipairs = ipairs({})
-local iter_pairs = pairs({})
 
 local function gether(iter, ctx, st)
 	local list = {}
@@ -78,10 +77,14 @@ local function iter_values_bfs(root, st)
 	end
 
 	local unvisited = st.unvisited
-	local visiting = unvisited[1]
-	if not visiting then return nil end
+	local visiting_node = unvisited[1]
+	if not visiting_node then return nil end
 
-	local next_visiting_st, node = iter_pairs(visiting, st.st)
+	local visiting_iter, visiting_ctx, visiting_st = st.iter, st.ctx, st.st
+	if not visiting_iter then
+		visiting_iter, visiting_ctx, visiting_st = pairs(visiting_node)
+	end
+	local next_visiting_st, node = visiting_iter(visiting_ctx, visiting_st)
 
 	if next_visiting_st == nil then
 		return iter_values_bfs(root, { unvisited = { unpack(unvisited, 2) } })
@@ -92,7 +95,12 @@ local function iter_values_bfs(root, st)
 		new_unvisited[#new_unvisited+1] = node
 	end
 
-	return { unvisited = new_unvisited, st = next_visiting_st }, node
+	return {
+		unvisited = new_unvisited,
+		iter = visiting_iter,
+		ctx = visiting_ctx,
+		st = next_visiting_st,
+	}, node
 end
 
 local function method_any_depth(self)
