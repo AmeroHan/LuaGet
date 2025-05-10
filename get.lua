@@ -26,12 +26,14 @@ local function mapped_iter(ctx, st)
 	local c_iter, c_ctx, c_st = st.c_iter, st.c_ctx, st.c_st
 	if not c_iter then
 		c_iter, c_ctx, c_st = ctx.map(p_value)
+		if not c_iter then
+			return mapped_iter(ctx, { p_st = p_st })
+		end
 	end
 
 	local next_c_st, c_value = c_iter(c_ctx, c_st)
 	if next_c_st == nil then
-		local next_p_st, new_p_value = p_iter(p_ctx, p_st)
-		return mapped_iter(ctx, { p_st = next_p_st, p_value = new_p_value })
+		return mapped_iter(ctx, { p_st = p_st })
 	end
 
 	return {
@@ -138,12 +140,27 @@ local function method_filter(self, predict)
 end
 methods.filter = method_filter
 
+local function safe_ipairs(x)
+	if type(x) ~= 'table' then return nil end
+	return ipairs(x)
+end
 local function method_items(self)
 	return Getter(
-		self, method_items, flat_map(ipairs, self[ITER], self[CTX], self[INIT_ST])
+		self, method_items, flat_map(safe_ipairs, self[ITER], self[CTX], self[INIT_ST])
 	)
 end
 methods.items = method_items
+
+local function safe_pairs(x)
+	if type(x) ~= 'table' then return nil end
+	return pairs(x)
+end
+local function method_values(self)
+	return Getter(
+		self, method_values, flat_map(safe_pairs, self[ITER], self[CTX], self[INIT_ST])
+	)
+end
+methods.values = method_values
 
 ----
 
@@ -156,7 +173,6 @@ end
 methods.iter = function (self)
 	return self[ITER], self[CTX], self[INIT_ST]
 end
-
 
 ---@type metatable
 Getter_mt = {
