@@ -121,6 +121,10 @@ local function method_iter(self)
 end
 methods.iter = method_iter
 
+methods.unpack = function (self)
+	return unpack(gether(method_iter(self)))
+end
+
 -- chainable methods:
 
 local function field_iter(ctx, st)
