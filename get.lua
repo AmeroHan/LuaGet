@@ -1,8 +1,8 @@
 local is = rawequal
+local type = type
 local setmt = setmetatable
-local unpack = unpack or table.unpack
+local unpack = table.unpack or unpack
 
-local iter_ipairs = ipairs({})
 
 local function gether(iter, ctx, st)
 	local list = {}
@@ -13,7 +13,7 @@ local function gether(iter, ctx, st)
 end
 
 
-local function mapped_iter(ctx, st)
+local function flat_map_iter(ctx, st)
 	local p_iter, p_ctx = ctx.p_iter, ctx.p_ctx
 	local p_st, p_value = st.p_st, st.p_value
 	if p_st == nil then return nil end
@@ -24,15 +24,15 @@ local function mapped_iter(ctx, st)
 
 	local c_iter, c_ctx, c_st = st.c_iter, st.c_ctx, st.c_st
 	if not c_iter then
-		c_iter, c_ctx, c_st = ctx.map(p_value)
+		c_iter, c_ctx, c_st = ctx.mapper(p_value)
 		if not c_iter then
-			return mapped_iter(ctx, { p_st = p_st })
+			return flat_map_iter(ctx, { p_st = p_st })
 		end
 	end
 
 	local next_c_st, c_value = c_iter(c_ctx, c_st)
 	if next_c_st == nil then
-		return mapped_iter(ctx, { p_st = p_st })
+		return flat_map_iter(ctx, { p_st = p_st })
 	end
 
 	return {
@@ -44,10 +44,10 @@ local function mapped_iter(ctx, st)
 	}, c_value
 end
 
-local function flat_map(map, iter, ctx, init_st)
+local function flat_map(mapper, iter, ctx, init_st)
 	return
-		mapped_iter,
-		{ map = map, p_iter = iter, p_ctx = ctx },
+		flat_map_iter,
+		{ mapper = mapper, p_iter = iter, p_ctx = ctx },
 		{ p_st = init_st }
 end
 
@@ -68,15 +68,28 @@ end
 
 local methods = {}
 
-local function iter_values_bfs(root, st)
+methods.one = function (self)
+	local st, value = self[ITER](self[CTX], self[INIT_ST])
+	if st == nil then return nil end
+	return value
+end
+
+local function method_iter(self)
+	return self[ITER], self[CTX], self[INIT_ST]
+end
+methods.iter = method_iter
+
+----
+
+local function bfs_field_values_iter(root, st)
 	if not st then
 		if type(root) ~= 'table' then
-			return { unvisited = {} }, root
+			return {}, root
 		end
-		return { unvisited = { root } }, root
+		return { root }, root
 	end
 
-	local unvisited = st.unvisited
+	local unvisited = st
 	local visiting_node = unvisited[1]
 	if not visiting_node then return nil end
 
@@ -87,35 +100,36 @@ local function iter_values_bfs(root, st)
 	local next_visiting_st, node = visiting_iter(visiting_ctx, visiting_st)
 
 	if next_visiting_st == nil then
-		return iter_values_bfs(root, { unvisited = { unpack(unvisited, 2) } })
+		return bfs_field_values_iter(root, { unpack(unvisited, 2) })
 	end
 
-	local new_unvisited = { unpack(unvisited) }
-	if type(node) == 'table' then
-		new_unvisited[#new_unvisited+1] = node
-	end
-
-	return {
-		unvisited = new_unvisited,
+	local new_st = {
 		iter = visiting_iter,
 		ctx = visiting_ctx,
 		st = next_visiting_st,
-	}, node
+		unpack(unvisited),
+	}
+	if type(node) == 'table' then
+		new_st[#new_st+1] = node
+	end
+
+	return new_st, node
+end
+
+local function bfs_field_values(value)
+	return bfs_field_values_iter, value, nil
 end
 
 local function method_any_depth(self)
 	return Getter(
-		self, method_any_depth,
-		flat_map(function (value)
-			return iter_values_bfs, value, nil
-		end, self[ITER], self[CTX], self[INIT_ST])
+		self, method_any_depth, flat_map(bfs_field_values, method_iter(self))
 	)
 end
 methods._ = method_any_depth
 
-local function iter_field(ctx, st)
-	local parent, entry = ctx[1], ctx[2]
-	for next_st, node in parent[ITER], parent[CTX], st do
+local function field_iter(ctx, st)
+	local entry = ctx.entry
+	for next_st, node in ctx.p_iter, ctx.p_ctx, st do
 		if type(node) == 'table' then
 			local value = node[entry]
 			if value then
@@ -126,12 +140,17 @@ local function iter_field(ctx, st)
 	return nil
 end
 local function method_field(self, name)
-	return Getter(self, name, iter_field, { self, name }, self[INIT_ST])
+	return Getter(
+		self, name,
+		field_iter,
+		{ p_iter = self[ITER], p_ctx = self[CTX], entry = name },
+		self[INIT_ST]
+	)
 end
 methods.field = method_field
 
 local function method_filter(self, predict)
-	local p_iter, p_ctx, p_init_st = self[ITER], self[CTX], self[INIT_ST]
+	local p_iter, p_ctx, p_init_st = method_iter(self)
 	return Getter(
 		self, method_filter,
 		function (ctx, st)
@@ -154,7 +173,7 @@ local function safe_ipairs(x)
 end
 local function method_items(self)
 	return Getter(
-		self, method_items, flat_map(safe_ipairs, self[ITER], self[CTX], self[INIT_ST])
+		self, method_items, flat_map(safe_ipairs, method_iter(self))
 	)
 end
 methods.items = method_items
@@ -165,22 +184,11 @@ local function safe_pairs(x)
 end
 local function method_values(self)
 	return Getter(
-		self, method_values, flat_map(safe_pairs, self[ITER], self[CTX], self[INIT_ST])
+		self, method_values, flat_map(safe_pairs, method_iter(self))
 	)
 end
 methods.values = method_values
 
-----
-
-methods.one = function (self)
-	local st, value = self[ITER](self[CTX], self[INIT_ST])
-	if st == nil then return nil end
-	return value
-end
-
-methods.iter = function (self)
-	return self[ITER], self[CTX], self[INIT_ST]
-end
 
 ---@type metatable
 Getter_mt = {
@@ -202,7 +210,7 @@ Getter_mt = {
 		-- for case 2, `arg1` is `books`, i.e., self[PARENT]
 
 		if not is(arg1, self[PARENT]) then  -- case 1
-			return gether(self[ITER], self[CTX], self[INIT_ST])
+			return gether(method_iter(self))
 		end
 
 		-- case 2
@@ -212,8 +220,10 @@ Getter_mt = {
 	end,
 }
 
+local ipairs_iter = ipairs({})
+
 local function get(data)
-	return Getter(nil, nil, iter_ipairs, { data }, 0)
+	return Getter(nil, nil, ipairs_iter, { data }, 0)
 end
 
 return setmt({}, {
