@@ -104,7 +104,8 @@ local methods = {}
 ---@param f fun(self: Getter, ...): IterFunc<CTX, ST, V>, CTX, ST
 local function chainable_method(f)
 	local function method(self, ...)
-		return Getter(self, method, f(self, ...))
+		local iter, ctx, init_st = f(self, ...)
+		return Getter(self, method, iter, ctx, init_st), ctx, init_st
 	end
 	return method
 end
@@ -136,12 +137,9 @@ local function field_iter(ctx, st)
 end
 
 local function method_field(self, name)
-	return Getter(
-		self, name,
-		field_iter,
-		{ p_iter = self[ITER], p_ctx = self[CTX], entry = name },
-		self[INIT_ST]
-	)
+	local ctx = { p_iter = self[ITER], p_ctx = self[CTX], entry = name }
+	local init_st = self[INIT_ST]
+	return Getter(self, name, field_iter, ctx, init_st), ctx, init_st
 end
 methods.field = method_field
 
@@ -250,28 +248,40 @@ Getter_mt = {
 
 		local key_type = type(key)
 		if key_type == 'function' then
+			---@diagnostic disable-next-line: redundant-return-value
 			return method_filter(method_items(self), key)
 		end
+		---@diagnostic disable-next-line: redundant-return-value
 		return method_field(self, key)
 	end,
-	__call = function (self, arg1, ...)
-		-- e.g.:
-		-- local books = get(data).books
-		-- local items = get(data).books.items
-		-- local case1 = get(data).books.items()  -- is `items()`
-		-- local case2 = get(data).books:items()  -- is `items(books)`
-
-		-- `self` is `items`
+	-- Example:
+	-- ```
+	-- local books = get(data).books
+	-- local items = get(data).books.items
+	--
+	-- -- case 1: gether values
+	-- local case1 = get(data).books.items()  -- is `items()`
+	--
+	-- -- case 2: call methods
+	-- local case2 = get(data).books:items()  -- is `items(books)`
+	--
+	-- -- case 3: use as an iterator function
+	-- for _, book_title in get(data).books:items() do
+	-- -- this will call `case2(ctx, st)`
+	-- end
+	-- ```
+	__call = function (self, ...)
+		-- in the example, `self` is `items`
 		-- for case 2, `arg1` is `books`, i.e., self[PARENT]
-
-		if not is(arg1, self[PARENT]) then  -- case 1
-			return gether(method_iter(self))
+		if ... == self[PARENT] then  -- case 2
+			local method = methods[self[ENTRY]]
+			assert(method)
+			return method(...)
+		elseif ... == self[CTX] then  -- case 3
+			return self[ITER](...)
 		end
-
-		-- case 2
-		local method = methods[self[ENTRY]]
-		assert(method)
-		return method(arg1, ...)
+		-- case 1
+		return gether(method_iter(self))
 	end,
 }
 
