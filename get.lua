@@ -266,21 +266,36 @@ Getter_mt = {
 	-- local case2 = get(data).books:items()  -- is `items(books)`
 	--
 	-- -- case 3: use as an iterator function
-	-- for _, book_title in get(data).books:items() do
-	-- -- this will call `case2(ctx, st)`
+	-- for _, book in get(data).books:items() do
+	--    -- this will call `case2(ctx, init_st)` and `case2(ctx, st)`
+	-- end
+	-- for _, book in case2 do
+	--    -- this will call `case2(nil, nil)` and `case2(nil, st)`
 	-- end
 	-- ```
 	__call = function (self, ...)
-		-- in the example, `self` is `items`
-		-- for case 2, `arg1` is `books`, i.e., self[PARENT]
-		if ... == self[PARENT] then  -- case 2
-			local method = methods[self[ENTRY]]
+		-- this judgement must take place before `arg_len` check,
+		-- as `arg_len` can also be 2 here:
+		if ... == self[PARENT] then  -- case 2, `self` is `items` in example
+			local method = methods[self[ENTRY]]  -- `self[ENTRY]` is 'items'
 			assert(method)
 			return method(...)
-		elseif ... == self[CTX] then  -- case 3
-			return self[ITER](...)
 		end
-		-- case 1
+
+		local arg_len = select('#', ...)
+		if arg_len == 2 then  -- case 3, `self` is `case2` in example
+			local iter = self[ITER]
+			local ctx, st = ...
+			if ctx == nil then
+				ctx = self[CTX]
+				if st == nil then
+					st = self[INIT_ST]
+				end
+			end
+			return iter(ctx, st)
+		end
+		-- case 1, `self` is `items` in example
+		assert(arg_len ~= 0, 'LuaGet对象函数调用收到了意外的参数')
 		return gether(method_iter(self))
 	end,
 }
