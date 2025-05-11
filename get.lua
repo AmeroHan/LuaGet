@@ -148,7 +148,7 @@ end
 methods.field = method_field
 
 
-local function bfs_field_values_iter(root, st)
+local function bfs_values_iter(root, st)
 	if not st then
 		if type(root) ~= 'table' then
 			return {}, root
@@ -167,7 +167,7 @@ local function bfs_field_values_iter(root, st)
 	local next_visiting_st, node = visiting_iter(visiting_ctx, visiting_st)
 
 	if next_visiting_st == nil then
-		return bfs_field_values_iter(root, { unpack(unvisited, 2) })
+		return bfs_values_iter(root, { unpack(unvisited, 2) })
 	end
 
 	local new_st = {
@@ -184,13 +184,13 @@ local function bfs_field_values_iter(root, st)
 end
 
 local function bfs_field_values(value)
-	return bfs_field_values_iter, value, nil
+	return bfs_values_iter, value, nil
 end
 
-methods._ = chainable_method(function (self)
+local method_bfs_values = chainable_method(function (self)
 	return flat_map(bfs_field_values, method_iter(self))
 end)
-
+-- no need to be added to `methods`
 
 local method_filter = chainable_method(function (self, predict)
 	local p_iter, p_ctx, p_init_st = method_iter(self)
@@ -249,6 +249,10 @@ local keys_to_ignore = {
 Getter_mt = {
 	__index = function (self, key)
 		if keys_to_ignore[key] then return nil end
+		if key == '_' then
+			---@diagnostic disable-next-line: redundant-return-value
+			return method_bfs_values(self)
+		end
 
 		local key_type = type(key)
 		if key_type == 'function' then
