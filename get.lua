@@ -38,7 +38,6 @@ end
 local function flat_map_iter(ctx, st)
 	local p_iter, p_ctx = ctx.p_iter, ctx.p_ctx
 	local p_st, p_value = st.p_st, st.p_value
-	if p_st == nil then return nil end
 	if p_value == nil then
 		p_st, p_value = p_iter(p_ctx, p_st)
 		if p_st == nil then return nil end
@@ -48,6 +47,7 @@ local function flat_map_iter(ctx, st)
 	if not c_iter then
 		c_iter, c_ctx, c_st = ctx.mapper(p_value)
 		if not c_iter then
+			if p_st == nil then return nil end
 			return flat_map_iter(ctx, { p_st = p_st })
 		end
 	end
@@ -241,9 +241,13 @@ methods.values = chainable_method(function (self)
 	return flat_map(safe_pairs, method_iter(self))
 end)
 
-
+local keys_to_ignore = {
+	[PARENT] = true, [ENTRY] = true, [ITER] = true, [CTX] = true, [INIT_ST] = true,
+}
 Getter_mt = {
 	__index = function (self, key)
+		if keys_to_ignore[key] then return nil end
+
 		local key_type = type(key)
 		if key_type == 'function' then
 			return method_filter(method_items(self), key)
@@ -271,10 +275,9 @@ Getter_mt = {
 	end,
 }
 
-local ipairs_iter = ipairs({})
-
+local next = next
 local function get(data)
-	return Getter(nil, nil, ipairs_iter, { data }, 0)
+	return Getter(nil, nil, next, { data }, nil)
 end
 
 return setmt({}, {
