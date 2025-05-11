@@ -4,6 +4,13 @@ local setmt = setmetatable
 local unpack = table.unpack or unpack
 
 
+---@alias IterFunc<CTX, ST, V> fun(ctx: CTX, st: ST): ST | nil, V?
+
+---@generic CTX, ST, V
+---@param iter IterFunc<CTX, ST, V>
+---@param ctx CTX
+---@param st ST
+---@return V[]
 local function gether(iter, ctx, st)
 	local list = {}
 	for _, v in iter, ctx, st do
@@ -12,7 +19,22 @@ local function gether(iter, ctx, st)
 	return list
 end
 
+---@alias FlatMapCtx<P_CTX, P_ST, P_V, C_V> {
+---   mapper: (fun(x: P_V): C_V),
+---   p_iter: IterFunc<P_CTX, P_ST, P_V>,
+---   p_ctx: P_CTX,
+---}
 
+---@alias FlatMapSt<P_ST, P_V, C_CTX, C_ST, C_V> {
+---   p_st: any | nil,
+---   p_value?: any,
+---   c_iter?: IterFunc,
+---   c_ctx?: any,
+---   c_st?: any,
+---}
+
+---@generic P_CTX, P_ST, P_V, C_CTX, C_ST, C_V
+---@type IterFunc<FlatMapCtx<P_CTX, P_ST, P_V>, FlatMapSt<P_ST, P_V, C_CTX, C_ST, C_V>, C_V>
 local function flat_map_iter(ctx, st)
 	local p_iter, p_ctx = ctx.p_iter, ctx.p_ctx
 	local p_st, p_value = st.p_st, st.p_value
@@ -44,6 +66,11 @@ local function flat_map_iter(ctx, st)
 	}, c_value
 end
 
+---@generic P_CTX, P_ST, P_V, C_CTX, C_ST, C_V
+---@param mapper (fun(x: P_V): C_V)
+---@param iter IterFunc<P_CTX, P_ST, P_V>
+---@param ctx P_CTX
+---@param init_st P_ST
 local function flat_map(mapper, iter, ctx, init_st)
 	return
 		flat_map_iter,
@@ -51,10 +78,15 @@ local function flat_map(mapper, iter, ctx, init_st)
 		{ p_st = init_st }
 end
 
-
+---@class (exact) Symbol
+---@type Symbol, Symbol, Symbol, Symbol, Symbol
 local PARENT, ENTRY, ITER, CTX, INIT_ST = {}, {}, {}, {}, {}
 
-local Getter_mt
+---@class Getter
+
+local Getter_mt  ---@type metatable
+
+---@return Getter
 local function Getter(parent, entry, iter, ctx, init_st)
 	return setmt({
 		[PARENT] = parent,
@@ -68,6 +100,15 @@ end
 
 local methods = {}
 
+---@generic CTX, ST, V
+---@param f fun(self: Getter, ...): IterFunc<CTX, ST, V>, CTX, ST
+local function chainable_method(f)
+	local function method(self, ...)
+		return Getter(self, method, f(self, ...))
+	end
+	return method
+end
+
 methods.one = function (self)
 	local st, value = self[ITER](self[CTX], self[INIT_ST])
 	if st == nil then return nil end
@@ -79,7 +120,31 @@ local function method_iter(self)
 end
 methods.iter = method_iter
 
-----
+-- chainable methods:
+
+local function field_iter(ctx, st)
+	local entry = ctx.entry
+	for next_st, node in ctx.p_iter, ctx.p_ctx, st do
+		if type(node) == 'table' then
+			local value = node[entry]
+			if value then
+				return next_st, value
+			end
+		end
+	end
+	return nil
+end
+
+local function method_field(self, name)
+	return Getter(
+		self, name,
+		field_iter,
+		{ p_iter = self[ITER], p_ctx = self[CTX], entry = name },
+		self[INIT_ST]
+	)
+end
+methods.field = method_field
+
 
 local function bfs_field_values_iter(root, st)
 	if not st then
@@ -120,39 +185,14 @@ local function bfs_field_values(value)
 	return bfs_field_values_iter, value, nil
 end
 
-local function method_any_depth(self)
-	return Getter(
-		self, method_any_depth, flat_map(bfs_field_values, method_iter(self))
-	)
-end
-methods._ = method_any_depth
+methods._ = chainable_method(function (self)
+	return flat_map(bfs_field_values, method_iter(self))
+end)
 
-local function field_iter(ctx, st)
-	local entry = ctx.entry
-	for next_st, node in ctx.p_iter, ctx.p_ctx, st do
-		if type(node) == 'table' then
-			local value = node[entry]
-			if value then
-				return next_st, value
-			end
-		end
-	end
-	return nil
-end
-local function method_field(self, name)
-	return Getter(
-		self, name,
-		field_iter,
-		{ p_iter = self[ITER], p_ctx = self[CTX], entry = name },
-		self[INIT_ST]
-	)
-end
-methods.field = method_field
 
-local function method_filter(self, predict)
+local method_filter = chainable_method(function (self, predict)
 	local p_iter, p_ctx, p_init_st = method_iter(self)
-	return Getter(
-		self, method_filter,
+	return
 		function (ctx, st)
 			for new_st, node in p_iter, ctx, st do
 				if predict(node) then
@@ -163,34 +203,45 @@ local function method_filter(self, predict)
 		end,
 		p_ctx,
 		p_init_st
-	)
-end
+end)
 methods.filter = method_filter
+
 
 local function safe_ipairs(x)
 	if type(x) ~= 'table' then return nil end
 	return ipairs(x)
 end
-local function method_items(self)
-	return Getter(
-		self, method_items, flat_map(safe_ipairs, method_iter(self))
-	)
-end
+
+local method_items = chainable_method(function (self)
+	return flat_map(safe_ipairs, method_iter(self))
+end)
+
 methods.items = method_items
+
+
+methods.map = chainable_method(function (self, mapper)
+	local p_iter, p_ctx, p_init_st = method_iter(self)
+	return
+		function (ctx, st)
+			local next_st, value = p_iter(ctx, st)
+			if next_st == nil then return nil end
+			return next_st, mapper(value)
+		end,
+		p_ctx,
+		p_init_st
+end)
+
 
 local function safe_pairs(x)
 	if type(x) ~= 'table' then return nil end
 	return pairs(x)
 end
-local function method_values(self)
-	return Getter(
-		self, method_values, flat_map(safe_pairs, method_iter(self))
-	)
-end
-methods.values = method_values
+
+methods.values = chainable_method(function (self)
+	return flat_map(safe_pairs, method_iter(self))
+end)
 
 
----@type metatable
 Getter_mt = {
 	__index = function (self, key)
 		local key_type = type(key)
@@ -200,7 +251,7 @@ Getter_mt = {
 		return method_field(self, key)
 	end,
 	__call = function (self, arg1, ...)
-		-- e.g.
+		-- e.g.:
 		-- local books = get(data).books
 		-- local items = get(data).books.items
 		-- local case1 = get(data).books.items()  -- is `items()`
