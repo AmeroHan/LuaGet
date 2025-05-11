@@ -140,10 +140,10 @@ local function field_iter(ctx, st)
 	return nil
 end
 
-local function method_field(self, name)
-	local ctx = { p_iter = self[ITER], p_ctx = self[CTX], entry = name }
+local function method_field(self, key)
+	local ctx = { p_iter = self[ITER], p_ctx = self[CTX], entry = key }
 	local init_st = self[INIT_ST]
-	return Getter(self, name, field_iter, ctx, init_st), ctx, init_st
+	return Getter(self, key, field_iter, ctx, init_st), ctx, init_st
 end
 methods.field = method_field
 
