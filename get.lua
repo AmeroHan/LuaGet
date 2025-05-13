@@ -100,16 +100,6 @@ end
 
 local methods = {}
 
----@generic CTX, ST, V
----@param f fun(self: Getter, ...): IterFunc<CTX, ST, V>, CTX, ST
-local function chainable_method(f)
-	local function method(self, ...)
-		local iter, ctx, init_st = f(self, ...)
-		return Getter(self, method, iter, ctx, init_st), ctx, init_st
-	end
-	return method
-end
-
 methods.one = function (self)
 	local st, value = self[ITER](self[CTX], self[INIT_ST])
 	if st == nil then return nil end
@@ -121,11 +111,31 @@ local function method_iter(self)
 end
 methods.iter = method_iter
 
+
+local List_mt = {
+	__index = table,
+}
+local method_all = function (self)
+	return setmt(gether(self[ITER], self[CTX], self[INIT_ST]), List_mt)
+end
+methods.all = method_all
+
+
 methods.unpack = function (self)
-	return unpack(gether(method_iter(self)))
+	return unpack(method_all(self))
 end
 
 -- chainable methods:
+
+---@generic CTX, ST, V
+---@param f fun(self: Getter, ...): IterFunc<CTX, ST, V>, CTX, ST
+local function chainable_method(f)
+	local function method(self, ...)
+		local iter, ctx, init_st = f(self, ...)
+		return Getter(self, method, iter, ctx, init_st), ctx, init_st
+	end
+	return method
+end
 
 local function field_iter(ctx, st)
 	local entry = ctx.entry
@@ -217,7 +227,6 @@ end
 local method_items = chainable_method(function (self)
 	return flat_map(safe_ipairs, method_iter(self))
 end)
-
 methods.items = method_items
 
 
@@ -242,6 +251,7 @@ end
 methods.values = chainable_method(function (self)
 	return flat_map(safe_pairs, method_iter(self))
 end)
+
 
 local keys_to_ignore = {
 	[PARENT] = true, [ENTRY] = true, [ITER] = true, [CTX] = true, [INIT_ST] = true,
@@ -304,7 +314,7 @@ Getter_mt = {
 		end
 		-- case 1, `self` is `items` in example
 		assert(arg_len ~= 0, 'LuaGet对象函数调用收到了意外的参数')
-		return gether(method_iter(self))
+		return method_all(self)
 	end,
 }
 
