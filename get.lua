@@ -1,7 +1,30 @@
-local is = rawequal
 local type = type
 local setmt = setmetatable
+local select = select
 local unpack = table.unpack or unpack
+
+local function list_with_length_iter(tbl, last_i)
+	local i = last_i + 1
+	if i > tbl.n then return nil end
+	return i, tbl[i]
+end
+
+local function iterate_args(...)
+	return list_with_length_iter, { n = select('#', ...), ... }, 0
+end
+
+local function args_to_string(...)
+	local unserializable = {
+		table = true, ['function'] = true, thread = true, userdata = true,
+	}
+
+	local t = {}
+	for i, arg in iterate_args(...) do
+		t[i] = string.format(unserializable[arg] and '(%s)' or '%q', arg)
+	end
+
+	return table.concat(t, ', ')
+end
 
 
 ---@alias IterFunc<CTX, ST, V> fun(ctx: CTX, st: ST): ST | nil, V?
@@ -13,8 +36,10 @@ local unpack = table.unpack or unpack
 ---@return V[]
 local function gether(iter, ctx, st)
 	local list = {}
+	local len = 0
 	for _, v in iter, ctx, st do
-		list[#list+1] = v
+		len = len + 1
+		list[len] = v
 	end
 	return list
 end
@@ -296,7 +321,9 @@ Getter_mt = {
 		-- as `arg_len` can also be 2 here:
 		if ... == self[PARENT] then  -- case 2, `self` is `items` in example
 			local method = methods[self[ENTRY]]  -- `self[ENTRY]` is 'items'
-			assert(method)
+			if not method then
+				error(("no method named '%s'"):format(method))
+			end
 			return method(...)
 		end
 
@@ -313,14 +340,15 @@ Getter_mt = {
 			return iter(ctx, st)
 		end
 		-- case 1, `self` is `items` in example
-		assert(arg_len ~= 0, 'LuaGet对象函数调用收到了意外的参数')
+		if arg_len ~= 0 then
+			error('LuaGet对象函数调用收到了意外的参数：'..args_to_string(...))
+		end
 		return method_all(self)
 	end,
 }
 
-local next = next
-local function get(data)
-	return Getter(nil, nil, next, { data }, nil)
+local function get(...)
+	return Getter('(Lua)', get, iterate_args(...))
 end
 
 return setmt({}, {
