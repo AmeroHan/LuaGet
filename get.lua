@@ -1,4 +1,5 @@
 local type = type
+local getmt = getmetatable
 local setmt = setmetatable
 local select = select
 local unpack = table.unpack or unpack
@@ -13,7 +14,7 @@ local function iterate_args(...)
 	return list_with_length_iter, { n = select('#', ...), ... }, 0
 end
 
-local function args_to_string(...)
+local function stringify_args(...)
 	local unserializable = {
 		table = true, ['function'] = true, thread = true, userdata = true,
 	}
@@ -24,6 +25,55 @@ local function args_to_string(...)
 	end
 
 	return table.concat(t, ', ')
+end
+
+local function do_nothing()
+	-- no operations
+end
+
+local safe_pairs, safe_ipairs
+do
+	local return_do_nothing = function () return do_nothing end
+	local test_tbl = setmt({}, {
+		__ipairs = return_do_nothing,
+		__pairs = return_do_nothing,
+	})
+
+	local next = next
+	if pairs(test_tbl) ~= do_nothing then
+		safe_pairs = function (x)
+			if type(x) ~= 'table' then return do_nothing end
+			return next, x, nil
+		end
+	else
+		safe_pairs = function (x)
+			local mt = getmt(x)
+			if mt and mt.__pairs then
+				return mt.__pairs(x)
+			elseif type(x) == 'table' then
+				return next, x, nil
+			end
+			return do_nothing
+		end
+	end
+
+	local ipairs_iter = ipairs({})
+	if ipairs(test_tbl) ~= do_nothing then
+		safe_ipairs = function (x)
+			if type(x) ~= 'table' then return do_nothing end
+			return ipairs_iter, x, 0
+		end
+	else
+		safe_ipairs = function (x)
+			local mt = getmt(x)
+			if mt and mt.__ipairs then
+				return mt.__ipairs(x)
+			elseif type(x) == 'table' then
+				return ipairs_iter, x, 0
+			end
+			return do_nothing
+		end
+	end
 end
 
 
@@ -44,22 +94,22 @@ local function gether(iter, ctx, st)
 	return list
 end
 
----@alias FlatMapCtx<P_CTX, P_ST, P_V, C_V> {
----   mapper: (fun(x: P_V): C_V),
+---@alias FlatMapCtx<P_CTX, P_ST, P_V, C_CTX, C_ST, C_V> {
+---   mapper: (fun(x: P_V): IterFunc<C_CTX, C_ST, C_V>, C_CTX, C_ST),
 ---   p_iter: IterFunc<P_CTX, P_ST, P_V>,
 ---   p_ctx: P_CTX,
 ---}
 
 ---@alias FlatMapSt<P_ST, P_V, C_CTX, C_ST, C_V> {
----   p_st: any | nil,
----   p_value?: any,
----   c_iter?: IterFunc,
----   c_ctx?: any,
----   c_st?: any,
+---   p_st: P_ST,
+---   p_value: P_V?,
+---   c_iter: IterFunc<C_CTX, C_ST, C_V>?,
+---   c_ctx: C_CTX?,
+---   c_st: C_ST?,
 ---}
 
 ---@generic P_CTX, P_ST, P_V, C_CTX, C_ST, C_V
----@type IterFunc<FlatMapCtx<P_CTX, P_ST, P_V>, FlatMapSt<P_ST, P_V, C_CTX, C_ST, C_V>, C_V>
+---@type IterFunc<FlatMapCtx<P_CTX, P_ST, P_V, C_CTX, C_ST, C_V>, FlatMapSt<P_ST, P_V, C_CTX, C_ST, C_V>, C_V>
 local function flat_map_iter(ctx, st)
 	local p_iter, p_ctx = ctx.p_iter, ctx.p_ctx
 	local p_st, p_value = st.p_st, st.p_value
@@ -71,10 +121,6 @@ local function flat_map_iter(ctx, st)
 	local c_iter, c_ctx, c_st = st.c_iter, st.c_ctx, st.c_st
 	if not c_iter then
 		c_iter, c_ctx, c_st = ctx.mapper(p_value)
-		if not c_iter then
-			if p_st == nil then return nil end
-			return flat_map_iter(ctx, { p_st = p_st })
-		end
 	end
 
 	local next_c_st, c_value = c_iter(c_ctx, c_st)
@@ -183,47 +229,42 @@ end
 methods.field = method_field
 
 
-local function bfs_values_iter(root, st)
+local function bfs_descendants_iter(root, st)
 	if not st then
-		if type(root) ~= 'table' then
-			return {}, root
-		end
 		return { root }, root
 	end
 
 	local unvisited = st
 	local visiting_node = unvisited[1]
-	if not visiting_node then return nil end
+	if visiting_node == nil then return nil end
 
-	local visiting_iter, visiting_ctx, visiting_st = st.iter, st.ctx, st.st
-	if not visiting_iter then
-		visiting_iter, visiting_ctx, visiting_st = pairs(visiting_node)
+	local c_iter, c_ctx, c_st = st.iter, st.ctx, st.st
+	if not c_iter then
+		c_iter, c_ctx, c_st = safe_pairs(visiting_node)
 	end
-	local next_visiting_st, node = visiting_iter(visiting_ctx, visiting_st)
 
-	if next_visiting_st == nil then
-		return bfs_values_iter(root, { unpack(unvisited, 2) })
+	local next_c_st, node = c_iter(c_ctx, c_st)  ---@diagnostic disable-line: param-type-mismatch
+	if next_c_st == nil then  -- current visiting node is exhausted, visit next unvisited node
+		return bfs_descendants_iter(root, { unpack(unvisited, 2) })
 	end
 
 	local new_st = {
-		iter = visiting_iter,
-		ctx = visiting_ctx,
-		st = next_visiting_st,
+		iter = c_iter,
+		ctx = c_ctx,
+		st = next_c_st,
 		unpack(unvisited),
 	}
-	if type(node) == 'table' then
-		new_st[#new_st+1] = node
-	end
+	new_st[#new_st+1] = node
 
 	return new_st, node
 end
 
-local function bfs_field_values(value)
-	return bfs_values_iter, value, nil
+local function bfs_descendants(value)
+	return bfs_descendants_iter, value, nil
 end
 
-local method_bfs_values = chainable_method(function (self)
-	return flat_map(bfs_field_values, method_iter(self))
+local method_bfs_descendants = chainable_method(function (self)
+	return flat_map(bfs_descendants, method_iter(self))
 end)
 -- no need to be added to `methods`
 
@@ -244,11 +285,6 @@ end)
 methods.filter = method_filter
 
 
-local function safe_ipairs(x)
-	if type(x) ~= 'table' then return nil end
-	return ipairs(x)
-end
-
 local method_items = chainable_method(function (self)
 	return flat_map(safe_ipairs, method_iter(self))
 end)
@@ -268,11 +304,6 @@ methods.map = chainable_method(function (self, mapper)
 end)
 
 
-local function safe_pairs(x)
-	if type(x) ~= 'table' then return nil end
-	return pairs(x)
-end
-
 methods.values = chainable_method(function (self)
 	return flat_map(safe_pairs, method_iter(self))
 end)
@@ -285,8 +316,11 @@ Getter_mt = {
 	__index = function (self, key)
 		if keys_to_ignore[key] then return nil end
 		if key == '_' then
+			if self[ENTRY] == method_bfs_descendants then
+				error('attempt to retrieve descendants continuously, i.e., `xxx._._`', 2)
+			end
 			---@diagnostic disable-next-line: redundant-return-value
-			return method_bfs_values(self)
+			return method_bfs_descendants(self)
 		end
 
 		local key_type = type(key)
@@ -322,7 +356,7 @@ Getter_mt = {
 		if ... == self[PARENT] then  -- case 2, `self` is `items` in example
 			local method = methods[self[ENTRY]]  -- `self[ENTRY]` is 'items'
 			if not method then
-				error(("no method named '%s'"):format(method))
+				error(("no method named '%s'"):format(self[ENTRY]), 2)
 			end
 			return method(...)
 		end
@@ -341,14 +375,15 @@ Getter_mt = {
 		end
 		-- case 1, `self` is `items` in example
 		if arg_len ~= 0 then
-			error('LuaGet对象函数调用收到了意外的参数：'..args_to_string(...))
+			error('LuaGet对象函数调用收到了意外的参数：'..stringify_args(...), 2)
 		end
 		return method_all(self)
 	end,
 }
 
 local function get(...)
-	return Getter('(Lua)', get, iterate_args(...))
+	local iter, ctx, init_st = iterate_args(...)
+	return Getter('(LuaGet)', get, iter, ctx, init_st), ctx, init_st
 end
 
 return setmt({}, {
