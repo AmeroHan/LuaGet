@@ -7,14 +7,24 @@ local pack = table.pack or function (...)
 	return { n = select('#', ...), ... }
 end
 
-local function tuple_iter(tuple, last_i)
+local function list_iter(list, last_i)
 	local i = last_i + 1
-	if i > tuple.n then return nil end
-	return i, tuple[i]
+	if i > list.n then return nil end
+	return i, list[i]
+end
+
+local function list_iter_skip_nil(list, last_i)
+	local i = last_i + 1
+	if i > list.n then return nil end
+	local v = list[i]
+	if v == nil then
+		return list_iter_skip_nil(list, i)
+	end
+	return i, v
 end
 
 local function iterate_args(...)
-	return tuple_iter, pack(...), 0
+	return list_iter, pack(...), 0
 end
 
 local function stringify_args(...)
@@ -86,14 +96,15 @@ end
 ---@param iter IterFunc<CTX, ST, V>
 ---@param ctx CTX
 ---@param st ST
----@return V[]
+---@return table
 local function gether(iter, ctx, st)
 	local list = {}
-	local len = 0
+	local n = 0
 	for _, v in iter, ctx, st do
-		len = len + 1
-		list[len] = v
+		n = n + 1
+		list[n] = v
 	end
+	list.n = n
 	return list
 end
 
@@ -144,30 +155,30 @@ end
 ---@param mapper (fun(x: P_V): C_V)
 ---@param iter IterFunc<P_CTX, P_ST, P_V>
 ---@param ctx P_CTX
----@param init_st P_ST
-local function flat_map(mapper, iter, ctx, init_st)
+---@param st0 P_ST
+local function flat_map(mapper, iter, ctx, st0)
 	return
 		flat_map_iter,
 		{ mapper = mapper, p_iter = iter, p_ctx = ctx },
-		{ p_st = init_st }
+		{ p_st = st0 }
 end
 
 ---@class (exact) Symbol
----@type Symbol, Symbol, Symbol, Symbol, Symbol
-local PARENT, ENTRY, ITER, CTX, INIT_ST = {}, {}, {}, {}, {}
+---@type Symbol, Symbol, Symbol, Symbol, Symbol, Symbol
+local PARENT, ENTRY, ITER, CTX, ST0 = {}, {}, {}, {}, {}
 
 ---@class Getter
 
 local Getter_mt  ---@type metatable
 
 ---@return Getter
-local function Getter(parent, entry, iter, ctx, init_st)
+local function Getter(parent, entry, iter, ctx, st0)
 	return setmt({
 		[PARENT] = parent,
 		[ENTRY] = entry,
 		[ITER] = iter,
 		[CTX] = ctx,
-		[INIT_ST] = init_st,
+		[ST0] = st0,
 	}, Getter_mt)
 end
 
@@ -175,22 +186,36 @@ end
 local methods = {}
 
 methods.one = function (self)
-	local st, value = self[ITER](self[CTX], self[INIT_ST])
+	local st, value = self[ITER](self[CTX], self[ST0])
 	if st == nil then return nil end
 	return value
 end
 
-local function method_iter(self)
-	return self[ITER], self[CTX], self[INIT_ST]
+local function method_iterate(self)
+	return self[ITER], self[CTX], self[ST0]
 end
-methods.iter = method_iter
+methods.iterate = method_iterate
+
+
+local function to_generator(iter, ctx, st)
+	return function ()
+		local value
+		st, value = iter(ctx, st)
+		if st == nil then return nil end
+		return value
+	end
+end
+
+methods.generate = function (self)
+	return to_generator(method_iterate(self))
+end
 
 
 local List_mt = {
 	__index = table,
 }
 local method_all = function (self)
-	return setmt(gether(self[ITER], self[CTX], self[INIT_ST]), List_mt)
+	return setmt(gether(self[ITER], self[CTX], self[ST0]), List_mt)
 end
 methods.all = method_all
 
@@ -205,8 +230,8 @@ end
 ---@param f fun(self: Getter, ...): IterFunc<CTX, ST, V>, CTX, ST
 local function chainable_method(f)
 	local function method(self, ...)
-		local iter, ctx, init_st = f(self, ...)
-		return Getter(self, method, iter, ctx, init_st), ctx, init_st
+		local iter, ctx, st0 = f(self, ...)
+		return Getter(self, method, iter, ctx, st0), ctx, st0
 	end
 	return method
 end
@@ -226,8 +251,8 @@ end
 
 local function method_field(self, key)
 	local ctx = { p_iter = self[ITER], p_ctx = self[CTX], entry = key }
-	local init_st = self[INIT_ST]
-	return Getter(self, key, field_iter, ctx, init_st), ctx, init_st
+	local st0 = self[ST0]
+	return Getter(self, key, field_iter, ctx, st0), ctx, st0
 end
 methods.field = method_field
 
@@ -267,12 +292,12 @@ local function iterate_bfs_descendants(value)
 end
 
 local method_bfs_descendants = chainable_method(function (self)
-	return flat_map(iterate_bfs_descendants, method_iter(self))
+	return flat_map(iterate_bfs_descendants, method_iterate(self))
 end)
 -- no need to be added to `methods`
 
 
-local function iterate_filtered(predicate, iter, ctx, init_st)
+local function iterate_filtered(predicate, iter, ctx, st0)
 	return
 		function (ctx, st)
 			for new_st, node in iter, ctx, st do
@@ -283,33 +308,33 @@ local function iterate_filtered(predicate, iter, ctx, init_st)
 			return nil
 		end,
 		ctx,
-		init_st
+		st0
 end
 
 methods.filter = chainable_method(function (self, predicate)
-	return iterate_filtered(predicate, method_iter(self))
+	return iterate_filtered(predicate, method_iterate(self))
 end)
 
 
 local method_items = chainable_method(function (self, filter)
 	if not filter then
-		return flat_map(safe_ipairs, method_iter(self))
+		return flat_map(safe_ipairs, method_iterate(self))
 	end
-	return iterate_filtered(filter, flat_map(safe_ipairs, method_iter(self)))
+	return iterate_filtered(filter, flat_map(safe_ipairs, method_iterate(self)))
 end)
 methods.items = method_items
 
 
 methods.values = chainable_method(function (self, filter)
 	if not filter then
-		return flat_map(safe_pairs, method_iter(self))
+		return flat_map(safe_pairs, method_iterate(self))
 	end
-	return iterate_filtered(filter, flat_map(safe_pairs, method_iter(self)))
+	return iterate_filtered(filter, flat_map(safe_pairs, method_iterate(self)))
 end)
 
 
 methods.map = chainable_method(function (self, mapper)
-	local p_iter, p_ctx, p_init_st = method_iter(self)
+	local p_iter, p_ctx, p_st0 = method_iterate(self)
 	return
 		function (ctx, st)
 			local next_st, value = p_iter(ctx, st)
@@ -317,12 +342,12 @@ methods.map = chainable_method(function (self, mapper)
 			return next_st, mapper(value)
 		end,
 		p_ctx,
-		p_init_st
+		p_st0
 end)
 
 
 local keys_to_ignore = {
-	[PARENT] = true, [ENTRY] = true, [ITER] = true, [CTX] = true, [INIT_ST] = true,
+	[PARENT] = true, [ENTRY] = true, [ITER] = true, [CTX] = true, [ST0] = true,
 }
 Getter_mt = {
 	__index = function (self, key)
@@ -356,7 +381,7 @@ Getter_mt = {
 	--
 	-- -- case 3: use as an iterator function
 	-- for _, book in get(data).books:items() do
-	--    -- this will call `case2(ctx, init_st)` and `case2(ctx, st)`
+	--    -- this will call `case2(ctx, st0)` and `case2(ctx, st)`
 	-- end
 	-- for _, book in case2 do
 	--    -- this will call `case2(nil, nil)` and `case2(nil, st)`
@@ -380,7 +405,7 @@ Getter_mt = {
 			if ctx == nil then
 				ctx = self[CTX]
 				if st == nil then
-					st = self[INIT_ST]
+					st = self[ST0]
 				end
 			end
 			return iter(ctx, st)
@@ -394,8 +419,8 @@ Getter_mt = {
 }
 
 local function get(...)
-	local iter, ctx, init_st = iterate_args(...)
-	return Getter('(LuaGet)', get, iter, ctx, init_st), ctx, init_st
+	local args = pack(...)
+	return Getter('(LuaGet)', get, list_iter_skip_nil, args, 0), args, 0
 end
 
 return setmt({}, {
