@@ -4,14 +4,14 @@ local setmt = setmetatable
 local select = select
 local unpack = table.unpack or unpack
 
-local function list_with_length_iter(tbl, last_i)
+local function tuple_iter(tuple, last_i)
 	local i = last_i + 1
-	if i > tbl.n then return nil end
-	return i, tbl[i]
+	if i > tuple.n then return nil end
+	return i, tuple[i]
 end
 
 local function iterate_args(...)
-	return list_with_length_iter, { n = select('#', ...), ... }, 0
+	return tuple_iter, { n = select('#', ...), ... }, 0
 end
 
 local function stringify_args(...)
@@ -259,36 +259,50 @@ local function bfs_descendants_iter(root, st)
 	return new_st, node
 end
 
-local function bfs_descendants(value)
+local function iterate_bfs_descendants(value)
 	return bfs_descendants_iter, value, nil
 end
 
 local method_bfs_descendants = chainable_method(function (self)
-	return flat_map(bfs_descendants, method_iter(self))
+	return flat_map(iterate_bfs_descendants, method_iter(self))
 end)
 -- no need to be added to `methods`
 
-local method_filter = chainable_method(function (self, predict)
-	local p_iter, p_ctx, p_init_st = method_iter(self)
+
+local function iterate_filtered(predict, iter, ctx, init_st)
 	return
 		function (ctx, st)
-			for new_st, node in p_iter, ctx, st do
+			for new_st, node in iter, ctx, st do
 				if predict(node) then
 					return new_st, node
 				end
 			end
 			return nil
 		end,
-		p_ctx,
-		p_init_st
+		ctx,
+		init_st
+end
+
+methods.filter = chainable_method(function (self, predict)
+	return iterate_filtered(predict, method_iter(self))
 end)
-methods.filter = method_filter
 
 
-local method_items = chainable_method(function (self)
-	return flat_map(safe_ipairs, method_iter(self))
+local method_items = chainable_method(function (self, filter)
+	if not filter then
+		return flat_map(safe_ipairs, method_iter(self))
+	end
+	return iterate_filtered(filter, flat_map(safe_ipairs, method_iter(self)))
 end)
 methods.items = method_items
+
+
+methods.values = chainable_method(function (self, filter)
+	if not filter then
+		return flat_map(safe_pairs, method_iter(self))
+	end
+	return iterate_filtered(filter, flat_map(safe_pairs, method_iter(self)))
+end)
 
 
 methods.map = chainable_method(function (self, mapper)
@@ -301,11 +315,6 @@ methods.map = chainable_method(function (self, mapper)
 		end,
 		p_ctx,
 		p_init_st
-end)
-
-
-methods.values = chainable_method(function (self)
-	return flat_map(safe_pairs, method_iter(self))
 end)
 
 
@@ -326,7 +335,7 @@ Getter_mt = {
 		local key_type = type(key)
 		if key_type == 'function' then
 			---@diagnostic disable-next-line: redundant-return-value
-			return method_filter(method_items(self), key)
+			return method_items(self, key)
 		end
 		---@diagnostic disable-next-line: redundant-return-value
 		return method_field(self, key)
