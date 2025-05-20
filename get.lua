@@ -191,6 +191,14 @@ methods.one = function (self)
 	return value
 end
 
+methods.must_one = function (self, message)
+	local st, value = self[ITER](self[CTX], self[ST0])
+	if st == nil then
+		error(message or 'there should be at least one value meeting the query, but nothing found', 2)
+	end
+	return value
+end
+
 local function method_iterate(self)
 	return self[ITER], self[CTX], self[ST0]
 end
