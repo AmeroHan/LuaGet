@@ -3,6 +3,9 @@ local getmt = getmetatable
 local setmt = setmetatable
 local select = select
 local unpack = table.unpack or unpack
+local pack = table.pack or function (...)
+	return { n = select('#', ...), ... }
+end
 
 local function tuple_iter(tuple, last_i)
 	local i = last_i + 1
@@ -11,7 +14,7 @@ local function tuple_iter(tuple, last_i)
 end
 
 local function iterate_args(...)
-	return tuple_iter, { n = select('#', ...), ... }, 0
+	return tuple_iter, pack(...), 0
 end
 
 local function stringify_args(...)
@@ -269,11 +272,11 @@ end)
 -- no need to be added to `methods`
 
 
-local function iterate_filtered(predict, iter, ctx, init_st)
+local function iterate_filtered(predicate, iter, ctx, init_st)
 	return
 		function (ctx, st)
 			for new_st, node in iter, ctx, st do
-				if predict(node) then
+				if predicate(node) then
 					return new_st, node
 				end
 			end
@@ -283,8 +286,8 @@ local function iterate_filtered(predict, iter, ctx, init_st)
 		init_st
 end
 
-methods.filter = chainable_method(function (self, predict)
-	return iterate_filtered(predict, method_iter(self))
+methods.filter = chainable_method(function (self, predicate)
+	return iterate_filtered(predicate, method_iter(self))
 end)
 
 
