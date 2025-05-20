@@ -164,8 +164,8 @@ local function flat_map(mapper, iter, ctx, st0)
 end
 
 ---@class (exact) Symbol
----@type Symbol, Symbol, Symbol, Symbol, Symbol, Symbol
-local PARENT, ENTRY, ITER, CTX, ST0 = {}, {}, {}, {}, {}
+---@type Symbol, Symbol, Symbol, Symbol, Symbol, Symbol, Symbol
+local PARENT, ENTRY, ITER, CTX, ST0, NEXT = {}, {}, {}, {}, {}, {}
 
 ---@class Getter
 
@@ -206,9 +206,10 @@ local function to_generator(iter, ctx, st)
 	end
 end
 
-methods.generate = function (self)
+local function method_generate(self)
 	return to_generator(method_iterate(self))
 end
+methods.generate = method_generate
 
 
 local List_mt = {
@@ -231,7 +232,7 @@ end
 local function chainable_method(f)
 	local function method(self, ...)
 		local iter, ctx, st0 = f(self, ...)
-		return Getter(self, method, iter, ctx, st0), ctx, st0
+		return Getter(self, method, iter, ctx, st0)
 	end
 	return method
 end
@@ -252,7 +253,7 @@ end
 local function method_field(self, key)
 	local ctx = { p_iter = self[ITER], p_ctx = self[CTX], entry = key }
 	local st0 = self[ST0]
-	return Getter(self, key, field_iter, ctx, st0), ctx, st0
+	return Getter(self, key, field_iter, ctx, st0)
 end
 methods.field = method_field
 
@@ -347,7 +348,7 @@ end)
 
 
 local keys_to_ignore = {
-	[PARENT] = true, [ENTRY] = true, [ITER] = true, [CTX] = true, [ST0] = true,
+	[PARENT] = true, [ENTRY] = true, [ITER] = true, [CTX] = true, [ST0] = true, [NEXT] = true,
 }
 Getter_mt = {
 	__index = function (self, key)
@@ -356,16 +357,13 @@ Getter_mt = {
 			if self[ENTRY] == method_bfs_descendants then
 				error('attempt to retrieve descendants continuously, i.e., `xxx._._`', 2)
 			end
-			---@diagnostic disable-next-line: redundant-return-value
 			return method_bfs_descendants(self)
 		end
 
 		local key_type = type(key)
 		if key_type == 'function' then
-			---@diagnostic disable-next-line: redundant-return-value
 			return method_items(self, key)
 		end
-		---@diagnostic disable-next-line: redundant-return-value
 		return method_field(self, key)
 	end,
 	-- Example:
@@ -380,10 +378,7 @@ Getter_mt = {
 	-- local case2 = get(data).books:items()  -- is `items(books)`
 	--
 	-- -- case 3: use as an iterator function
-	-- for _, book in get(data).books:items() do
-	--    -- this will call `case2(ctx, st0)` and `case2(ctx, st)`
-	-- end
-	-- for _, book in case2 do
+	-- for book in get(data).books:items() do
 	--    -- this will call `case2(nil, nil)` and `case2(nil, st)`
 	-- end
 	-- ```
@@ -399,17 +394,15 @@ Getter_mt = {
 		end
 
 		local arg_len = select('#', ...)
+
 		if arg_len == 2 then  -- case 3, `self` is `case2` in example
-			local iter = self[ITER]
-			local ctx, st = ...
-			if ctx == nil then
-				ctx = self[CTX]
-				if st == nil then
-					st = self[ST0]
-				end
+			local _, st = ...
+			if st == nil then
+				self[NEXT] = method_generate(self)
 			end
-			return iter(ctx, st)
+			return self[NEXT]()
 		end
+
 		-- case 1, `self` is `items` in example
 		if arg_len ~= 0 then
 			error('LuaGet对象函数调用收到了意外的参数：'..stringify_args(...), 2)
@@ -419,8 +412,7 @@ Getter_mt = {
 }
 
 local function get(...)
-	local args = pack(...)
-	return Getter('(LuaGet)', get, list_iter_skip_nil, args, 0), args, 0
+	return Getter('(LuaGet)', get, list_iter_skip_nil, pack(...), 0)
 end
 
 return setmt({}, {
